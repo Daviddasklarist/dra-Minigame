@@ -76,22 +76,28 @@
     // --- Spielerobjekt ---
     const player = {
       x: 120,
-      y: 300,
       width: 100,
       height: 100,
+      y: 0,
       velocityY: 0,
-      jumpPower: 18,
-      gravity: 0.8,
+      jumpPower: 20, // höherer Sprung
+      gravity: 0.7,  // langsamere Fallgeschwindigkeit
       onGround: true
     };
 
     const groundY = 300;
+    player.y = groundY;
+
+    // --- Hindernisse ---
     let obstacles = [];
     const obstacleSpeed = 7;
-    let lastObstacleTime = 0;
+    const obstacleBaseY = groundY + player.height - 20; // bündig mit Boden
+
+    // --- Spielstatus ---
     let score = 0;
     let gameOver = false;
     let started = false;
+    let lastObstacleTime = 0;
 
     // --- Steuerung ---
     document.addEventListener("keydown", e => {
@@ -109,11 +115,12 @@
     // --- Hindernis erzeugen ---
     function spawnObstacle() {
       const img = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
+      const size = 130 + Math.random() * 40; // größere Hindernisse
       obstacles.push({
         x: canvas.width,
-        y: groundY + 20,
-        width: 90,
-        height: 90,
+        width: size,
+        height: size,
+        y: groundY + player.height - size + 20,
         img
       });
     }
@@ -122,43 +129,41 @@
     function update(timestamp) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Boden
+      // Bodenlinie
       ctx.fillStyle = "#ccc";
-      ctx.fillRect(0, groundY + 120, canvas.width, 10);
+      ctx.fillRect(0, groundY + player.height, canvas.width, 10);
 
       // Spieler
       ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
 
-      // Physik
+      // Bewegung
       if (!player.onGround) {
         player.velocityY += player.gravity;
         player.y += player.velocityY;
         if (player.y >= groundY) {
           player.y = groundY;
-          player.onGround = true;
           player.velocityY = 0;
+          player.onGround = true;
         }
       }
 
-      // Hindernisse bewegen
+      // Hindernisse bewegen + zeichnen
       obstacles.forEach(o => {
         o.x -= obstacleSpeed;
-        ctx.drawImage(o.img, o.x, o.y - o.height + 70, o.width, o.height);
+        ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
       });
 
-      // Entfernen, wenn weg
+      // Alte Hindernisse entfernen
       obstacles = obstacles.filter(o => o.x + o.width > 0);
 
       // Kollision
       for (const o of obstacles) {
         const collides =
-          player.x < o.x + o.width - 10 &&
-          player.x + player.width - 10 > o.x &&
-          player.y + player.height - 20 > o.y - o.height + 70;
+          player.x < o.x + o.width - 20 &&
+          player.x + player.width - 20 > o.x &&
+          player.y + player.height - 10 > o.y;
 
-        if (collides) {
-          gameOver = true;
-        }
+        if (collides) gameOver = true;
       }
 
       // Score
@@ -173,11 +178,11 @@
         return;
       }
 
-      // Nur ein Hindernis zur Zeit
+      // Nur ein Hindernis gleichzeitig
       if (
         started &&
         obstacles.length === 0 &&
-        timestamp - lastObstacleTime > 1200 + Math.random() * 1200
+        timestamp - lastObstacleTime > 1300 + Math.random() * 1000
       ) {
         spawnObstacle();
         lastObstacleTime = timestamp;
@@ -187,9 +192,9 @@
     }
 
     function resetGame() {
-      score = 0;
       obstacles = [];
       gameOver = false;
+      score = 0;
       started = false;
       player.y = groundY;
       player.velocityY = 0;
