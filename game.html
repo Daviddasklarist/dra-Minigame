@@ -25,10 +25,9 @@
       overflow: hidden;
     }
 
-    #score {
+    #score, #coins {
       position: absolute;
       top: 10px;
-      left: 10px;
       background: rgba(0, 0, 0, 0.05);
       padding: 6px 12px;
       border-radius: 8px;
@@ -37,17 +36,8 @@
       color: #111;
     }
 
-    #coins {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      background: rgba(255, 215, 0, 0.2);
-      padding: 6px 12px;
-      border-radius: 8px;
-      font-weight: bold;
-      font-size: 18px;
-      color: #111;
-    }
+    #score { left: 10px; }
+    #coins { right: 10px; background: rgba(255, 215, 0, 0.2); }
 
     #message {
       position: absolute;
@@ -76,23 +66,24 @@
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    // --- Audio ---
     const jumpSound = new Audio("Boing.mp3");
-
-    // --- Bilder ---
     const playerImg = new Image();
     playerImg.src = "spieler.png";
 
-    const obstacleImgs = ["hindernis1.png", "hindernis2.png", "hindernis3.png"].map(src => {
+    const obstacleImgs = [
+      { src: "hindernis1.png", hitScaleX: 1.0 },
+      { src: "hindernis2.png", hitScaleX: 0.6 }, // 🔹 schmalere Hitbox
+      { src: "hindernis3.png", hitScaleX: 1.0 }
+    ].map(o => {
       const img = new Image();
-      img.src = src;
-      return img;
+      img.src = o.src;
+      o.img = img;
+      return o;
     });
 
     const coinImg = new Image();
     coinImg.src = "muenze.png";
 
-    // --- Spieler ---
     const player = {
       x: 120,
       width: 100,
@@ -107,11 +98,8 @@
     const groundY = 300;
     player.y = groundY;
 
-    // --- Objekte ---
     let obstacles = [];
     let coins = [];
-
-    // --- Status ---
     let obstacleSpeed = 7;
     let score = 0;
     let euros = 0;
@@ -120,12 +108,10 @@
     let lastObstacleTime = 0;
     let lastCoinTime = 0;
 
-    // --- Steuerung ---
     document.addEventListener("keydown", e => {
       if (e.code === "Space") {
-        if (gameOver) {
-          resetGame();
-        } else if (player.onGround) {
+        if (gameOver) resetGame();
+        else if (player.onGround) {
           player.velocityY = -player.jumpPower;
           player.onGround = false;
           jumpSound.currentTime = 0;
@@ -135,52 +121,45 @@
       }
     });
 
-    // --- Hindernis erzeugen ---
     function spawnObstacle() {
-      const img = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
+      const o = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
       const size = 150 + Math.random() * 30;
       obstacles.push({
         x: canvas.width,
         width: size,
         height: size,
         y: groundY + player.height - size + 20,
-        img
+        img: o.img,
+        hitScaleX: o.hitScaleX
       });
     }
 
-    // --- Münze erzeugen ---
     function spawnCoin() {
       coins.push({
         x: canvas.width + 100,
-        y: groundY - 40 - Math.random() * 60, // leicht über Boden
+        y: groundY - 40 - Math.random() * 60,
         width: 50,
         height: 50,
         collected: false
       });
     }
 
-    // --- Kollision prüfen (mit Puffer) ---
-    function checkCollision(p, o, pad = 15) {
+    function checkCollision(p, o, pad = 15, expand = 0) {
       return (
-        p.x + pad < o.x + o.width - pad &&
-        p.x + p.width - pad > o.x + pad &&
-        p.y + p.height - pad > o.y + pad &&
-        p.y < o.y + o.height - pad
+        p.x + pad < o.x + o.width - pad + expand &&
+        p.x + p.width - pad > o.x + pad - expand &&
+        p.y + p.height - pad > o.y + pad - expand &&
+        p.y < o.y + o.height - pad + expand
       );
     }
 
-    // --- Hauptupdate ---
     function update(timestamp) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Boden
       ctx.fillStyle = "#ccc";
       ctx.fillRect(0, groundY + player.height, canvas.width, 10);
 
-      // Spieler
       ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
 
-      // Bewegung
       if (!player.onGround) {
         player.velocityY += player.gravity;
         player.y += player.velocityY;
@@ -191,23 +170,21 @@
         }
       }
 
-      // Hindernisse
       obstacles.forEach(o => {
         o.x -= obstacleSpeed;
         ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
       });
       obstacles = obstacles.filter(o => o.x + o.width > 0);
 
-      // Münzen
       coins.forEach(c => {
         c.x -= obstacleSpeed;
         if (!c.collected) ctx.drawImage(coinImg, c.x, c.y, c.width, c.height);
       });
       coins = coins.filter(c => c.x + c.width > 0);
 
-      // Münze einsammeln
+      // Münzen sammeln
       coins.forEach(c => {
-        if (!c.collected && checkCollision(player, c, 10)) {
+        if (!c.collected && checkCollision(player, c, 10, 15)) { // 🔸 größere Hitbox
           c.collected = true;
           euros++;
           document.getElementById("coins").textContent = `💰 ${euros} €`;
@@ -216,9 +193,10 @@
 
       // Hindernis-Kollision
       for (const o of obstacles) {
-        if (checkCollision(player, o)) {
-          gameOver = true;
-        }
+        const scaledWidth = o.width * o.hitScaleX; // 🔹 schmalere Hitbox bei Hindernis 2
+        const offset = (o.width - scaledWidth) / 2;
+        const virtualObstacle = { x: o.x + offset, y: o.y, width: scaledWidth, height: o.height };
+        if (checkCollision(player, virtualObstacle)) gameOver = true;
       }
 
       // Score
@@ -227,18 +205,16 @@
         document.getElementById("score").textContent = `Score: ${score}`;
       }
 
-      // Game Over
       if (gameOver) {
         document.getElementById("message").style.display = "block";
         return;
       }
 
-      // Schwierigkeit anpassen
-      if (score % 500 === 0 && score > 0) {
-        obstacleSpeed += 0.5; // allmählich schneller
+      // 🚀 Dynamische Schwierigkeit: alle 300 Punkte minimal schneller
+      if (score % 300 === 0 && score > 0) {
+        obstacleSpeed = Math.min(obstacleSpeed + 0.3, 16);
       }
 
-      // Spawning
       if (started && obstacles.length === 0 && timestamp - lastObstacleTime > 1300 + Math.random() * 1000) {
         spawnObstacle();
         lastObstacleTime = timestamp;
