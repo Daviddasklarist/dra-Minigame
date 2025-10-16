@@ -7,50 +7,29 @@
   <style>
     body {
       margin: 0;
-      background: #f9f9f9;
       overflow: hidden;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      font-family: system-ui, sans-serif;
+      background: linear-gradient(to bottom, #aee1f9, #f0f9ff);
+      font-family: 'Segoe UI', sans-serif;
+      text-align: center;
     }
 
-    #game {
-      position: relative;
-      width: 600px;
-      height: 200px;
-      background: #fff;
-      border: 3px solid #444;
-      overflow: hidden;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    canvas {
+      display: block;
+      margin: 0 auto;
+      background: #d8f3dc;
+      border-bottom: 8px solid #40916c;
+    }
+
+    #score {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 8px 15px;
       border-radius: 10px;
-    }
-
-    #player {
-      position: absolute;
-      bottom: 0;
-      left: 50px;
-      width: 50px;
-      height: 50px;
-      background-image: url('spieler.png');
-      background-size: contain;
-      background-repeat: no-repeat;
-    }
-
-    .obstacle {
-      position: absolute;
-      bottom: 0;
-      width: 50px;
-      height: 50px;
-      background-size: contain;
-      background-repeat: no-repeat;
-      animation: move 2.5s linear infinite;
-    }
-
-    @keyframes move {
-      from { right: -60px; }
-      to { right: 660px; }
+      font-weight: bold;
+      font-size: 18px;
+      color: #333;
     }
 
     #message {
@@ -58,108 +37,161 @@
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      font-size: 28px;
-      color: #222;
-      text-align: center;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 20px 40px;
+      border-radius: 12px;
+      font-size: 22px;
       display: none;
-      background: rgba(255,255,255,0.9);
-      padding: 10px 20px;
-      border-radius: 8px;
     }
   </style>
 </head>
 <body>
-  <div id="game">
-    <div id="player"></div>
-    <div id="message">💀 Game Over<br><small>Drück ENTER zum Neustart</small></div>
-  </div>
+  <div id="score">Score: 0</div>
+  <div id="message">Game Over<br><small>Drücke <b>Leertaste</b> für Neustart</small></div>
+  <canvas id="gameCanvas" width="800" height="400"></canvas>
 
   <script>
-    const player = document.getElementById("player");
-    const game = document.getElementById("game");
-    const message = document.getElementById("message");
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
 
-    const obstacleIcons = ["hindernis1.png", "hindernis2.png", "hindernis3.png"];
+    // --- Bilder ---
+    const playerImg = new Image();
+    playerImg.src = "spieler.png";
 
-    let jumping = false;
-    let gameOver = false;
-
-    function jump() {
-      if (jumping || gameOver) return;
-      jumping = true;
-      let jumpHeight = 0;
-
-      const jumpInterval = setInterval(() => {
-        if (jumpHeight >= 80) {
-          clearInterval(jumpInterval);
-          const fallInterval = setInterval(() => {
-            if (jumpHeight <= 0) {
-              clearInterval(fallInterval);
-              jumping = false;
-            }
-            jumpHeight -= 4;
-            player.style.bottom = jumpHeight + "px";
-          }, 20);
-        }
-        jumpHeight += 4;
-        player.style.bottom = jumpHeight + "px";
-      }, 20);
-    }
-
-    function spawnObstacle() {
-      if (gameOver) return;
-
-      const obstacle = document.createElement("div");
-      obstacle.classList.add("obstacle");
-      obstacle.style.backgroundImage =
-        "url('" + obstacleIcons[Math.floor(Math.random() * obstacleIcons.length)] + "')";
-      obstacle.style.right = "-60px";
-      game.appendChild(obstacle);
-
-      const moveInterval = setInterval(() => {
-        if (gameOver) {
-          clearInterval(moveInterval);
-          obstacle.remove();
-          return;
-        }
-
-        const playerRect = player.getBoundingClientRect();
-        const obstacleRect = obstacle.getBoundingClientRect();
-
-        // Kollision prüfen
-        if (
-          playerRect.left < obstacleRect.right &&
-          playerRect.right > obstacleRect.left &&
-          playerRect.bottom > obstacleRect.top
-        ) {
-          gameOver = true;
-          message.style.display = "block";
-          clearInterval(moveInterval);
-          obstacle.remove();
-        }
-
-        if (parseInt(obstacle.style.right) > 660) {
-          obstacle.remove();
-          clearInterval(moveInterval);
-        }
-      }, 20);
-
-      // Nächstes Hindernis nach Zufallszeit spawnen
-      setTimeout(spawnObstacle, 1000 + Math.random() * 2000);
-    }
-
-    document.addEventListener("keydown", (e) => {
-      if (e.code === "Space" || e.code === "ArrowUp") jump();
-      if (e.code === "Enter" && gameOver) restart();
+    const obstacleImgs = [
+      "hindernis1.png",
+      "hindernis2.png",
+      "hindernis3.png"
+    ].map(src => {
+      const img = new Image();
+      img.src = src;
+      return img;
     });
 
-    function restart() {
-      message.style.display = "none";
-      gameOver = false;
-      spawnObstacle();
+    // --- Spieler ---
+    const player = {
+      x: 100,
+      y: 300,
+      width: 70,
+      height: 70,
+      velocityY: 0,
+      jumpPower: 15,
+      gravity: 1,
+      onGround: true
+    };
+
+    // --- Hindernisse ---
+    let obstacles = [];
+    const obstacleSpeed = 6;
+    const groundY = 330;
+
+    // --- Spielstatus ---
+    let score = 0;
+    let gameOver = false;
+    let gameStarted = false;
+
+    // --- Steuerung ---
+    document.addEventListener("keydown", e => {
+      if (e.code === "Space") {
+        if (gameOver) {
+          resetGame();
+        } else {
+          if (player.onGround) {
+            player.velocityY = -player.jumpPower;
+            player.onGround = false;
+          }
+          gameStarted = true;
+        }
+      }
+    });
+
+    // --- Neues Hindernis erzeugen ---
+    function spawnObstacle() {
+      const img = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
+      obstacles.push({
+        x: canvas.width,
+        y: groundY - 50,
+        width: 60,
+        height: 60,
+        img
+      });
     }
 
-    spawnObstacle();
+    // --- Hauptschleife ---
+    function update() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Boden
+      ctx.fillStyle = "#52b788";
+      ctx.fillRect(0, groundY + 40, canvas.width, canvas.height - groundY - 40);
+
+      // Spieler zeichnen
+      ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
+
+      // Schwerkraft
+      if (!player.onGround) {
+        player.velocityY += player.gravity;
+        player.y += player.velocityY;
+        if (player.y >= groundY - player.height) {
+          player.y = groundY - player.height;
+          player.onGround = true;
+          player.velocityY = 0;
+        }
+      }
+
+      // Hindernisse bewegen
+      obstacles.forEach(o => {
+        o.x -= obstacleSpeed;
+        ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
+      });
+
+      // Hindernisse entfernen
+      obstacles = obstacles.filter(o => o.x + o.width > 0);
+
+      // Kollision
+      obstacles.forEach(o => {
+        if (
+          player.x < o.x + o.width - 10 &&
+          player.x + player.width - 10 > o.x &&
+          player.y + player.height - 10 > o.y
+        ) {
+          gameOver = true;
+        }
+      });
+
+      // Score erhöhen
+      if (gameStarted && !gameOver) {
+        score++;
+        document.getElementById("score").textContent = `Score: ${score}`;
+      }
+
+      // Game Over
+      if (gameOver) {
+        document.getElementById("message").style.display = "block";
+        return;
+      }
+
+      // Hindernisse zufällig spawnen
+      if (Math.random() < 0.02) spawnObstacle();
+
+      requestAnimationFrame(update);
+    }
+
+    function resetGame() {
+      gameOver = false;
+      score = 0;
+      obstacles = [];
+      player.y = groundY - player.height;
+      player.velocityY = 0;
+      player.onGround = true;
+      document.getElementById("message").style.display = "none";
+      document.getElementById("score").textContent = "Score: 0";
+      requestAnimationFrame(update);
+    }
+
+    // Start
+    update();
   </script>
 </body>
 </html>
