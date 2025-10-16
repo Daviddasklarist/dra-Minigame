@@ -37,6 +37,18 @@
       color: #111;
     }
 
+    #coins {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255, 215, 0, 0.2);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-weight: bold;
+      font-size: 18px;
+      color: #111;
+    }
+
     #message {
       position: absolute;
       top: 50%;
@@ -55,6 +67,7 @@
 <body>
   <div id="gameContainer">
     <div id="score">Score: 0</div>
+    <div id="coins">💰 0 €</div>
     <div id="message">Game Over<br><small>Drücke <b>Leertaste</b> für Neustart</small></div>
     <canvas id="gameCanvas" width="900" height="400"></canvas>
   </div>
@@ -63,10 +76,10 @@
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    // --- Audio laden ---
-    const jumpSound = new Audio("Boing.mp3"); // <--- Dein Boing-Sound hier
+    // --- Audio ---
+    const jumpSound = new Audio("Boing.mp3");
 
-    // --- Bilder laden ---
+    // --- Bilder ---
     const playerImg = new Image();
     playerImg.src = "spieler.png";
 
@@ -76,7 +89,10 @@
       return img;
     });
 
-    // --- Spielerobjekt ---
+    const coinImg = new Image();
+    coinImg.src = "muenze.png";
+
+    // --- Spieler ---
     const player = {
       x: 120,
       width: 100,
@@ -91,15 +107,18 @@
     const groundY = 300;
     player.y = groundY;
 
-    // --- Hindernisse ---
+    // --- Objekte ---
     let obstacles = [];
-    const obstacleSpeed = 7;
+    let coins = [];
 
-    // --- Spielstatus ---
+    // --- Status ---
+    let obstacleSpeed = 7;
     let score = 0;
+    let euros = 0;
     let gameOver = false;
     let started = false;
     let lastObstacleTime = 0;
+    let lastCoinTime = 0;
 
     // --- Steuerung ---
     document.addEventListener("keydown", e => {
@@ -109,8 +128,8 @@
         } else if (player.onGround) {
           player.velocityY = -player.jumpPower;
           player.onGround = false;
-          jumpSound.currentTime = 0; // Boing von Anfang abspielen
-          jumpSound.play().catch(() => {}); // Fehler bei Autoplay verhindern
+          jumpSound.currentTime = 0;
+          jumpSound.play().catch(() => {});
           started = true;
         }
       }
@@ -129,13 +148,24 @@
       });
     }
 
-    // --- Kollision prüfen (mit "Puffer") ---
-    function checkCollision(p, o) {
-      const pad = 15; // reduziert Hitboxgröße = fairer
+    // --- Münze erzeugen ---
+    function spawnCoin() {
+      coins.push({
+        x: canvas.width + 100,
+        y: groundY - 40 - Math.random() * 60, // leicht über Boden
+        width: 50,
+        height: 50,
+        collected: false
+      });
+    }
+
+    // --- Kollision prüfen (mit Puffer) ---
+    function checkCollision(p, o, pad = 15) {
       return (
         p.x + pad < o.x + o.width - pad &&
         p.x + p.width - pad > o.x + pad &&
-        p.y + p.height - pad > o.y + pad
+        p.y + p.height - pad > o.y + pad &&
+        p.y < o.y + o.height - pad
       );
     }
 
@@ -166,10 +196,25 @@
         o.x -= obstacleSpeed;
         ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
       });
-
       obstacles = obstacles.filter(o => o.x + o.width > 0);
 
-      // Kollision
+      // Münzen
+      coins.forEach(c => {
+        c.x -= obstacleSpeed;
+        if (!c.collected) ctx.drawImage(coinImg, c.x, c.y, c.width, c.height);
+      });
+      coins = coins.filter(c => c.x + c.width > 0);
+
+      // Münze einsammeln
+      coins.forEach(c => {
+        if (!c.collected && checkCollision(player, c, 10)) {
+          c.collected = true;
+          euros++;
+          document.getElementById("coins").textContent = `💰 ${euros} €`;
+        }
+      });
+
+      // Hindernis-Kollision
       for (const o of obstacles) {
         if (checkCollision(player, o)) {
           gameOver = true;
@@ -188,14 +233,20 @@
         return;
       }
 
-      // Hindernisse spawnen
-      if (
-        started &&
-        obstacles.length === 0 &&
-        timestamp - lastObstacleTime > 1300 + Math.random() * 1000
-      ) {
+      // Schwierigkeit anpassen
+      if (score % 500 === 0 && score > 0) {
+        obstacleSpeed += 0.5; // allmählich schneller
+      }
+
+      // Spawning
+      if (started && obstacles.length === 0 && timestamp - lastObstacleTime > 1300 + Math.random() * 1000) {
         spawnObstacle();
         lastObstacleTime = timestamp;
+      }
+
+      if (started && timestamp - lastCoinTime > 2500 + Math.random() * 3000) {
+        spawnCoin();
+        lastCoinTime = timestamp;
       }
 
       requestAnimationFrame(update);
@@ -203,12 +254,16 @@
 
     function resetGame() {
       obstacles = [];
+      coins = [];
+      obstacleSpeed = 7;
       gameOver = false;
       score = 0;
+      euros = 0;
       started = false;
       player.y = groundY;
       player.velocityY = 0;
       document.getElementById("score").textContent = "Score: 0";
+      document.getElementById("coins").textContent = "💰 0 €";
       document.getElementById("message").style.display = "none";
       requestAnimationFrame(update);
     }
