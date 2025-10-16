@@ -52,6 +52,40 @@
       display: none;
       text-align: center;
     }
+    /* Start-Overlay */
+    #startMessage {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.9);
+      color: #fff;
+      padding: 22px 36px;
+      border-radius: 12px;
+      font-size: 18px;
+      line-height: 1.3;
+      display: block; /* sichtbar vor Start */
+      text-align: center;
+      white-space: pre-line;
+      max-width: 86%;
+      z-index: 60;
+    }
+    /* Popup für Park-Strafe */
+    #finePopup {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.85);
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-size: 16px;
+      display: none;
+      max-width: 80%;
+      text-align: center;
+      z-index: 50;
+    }
   </style>
 </head>
 <body>
@@ -59,6 +93,13 @@
     <div id="score">Score: 0</div>
     <div id="coins">💰 0 €</div>
     <div id="message">Game Over<br><small>Drücke <b>Leertaste</b> für Neustart</small></div>
+    <div id="finePopup">Hier ist Halteverbot, Kollege! Fürs Falschparken gibts 20 Euro Strafe! Firma dankt.</div>
+    <div id="startMessage">
+      Wir bauen Augsburg wieder auf!<br>
+      Nur du kannst’s richten – hüpf über alles, was wackelt,<br>
+      und füll die Stadtkasse wieder auf!<br>
+      <strong>Drück die Leertaste zum Starten.</strong>
+    </div>
     <canvas id="gameCanvas" width="900" height="400"></canvas>
   </div>
 
@@ -67,17 +108,69 @@
     const ctx = canvas.getContext("2d");
 
     const jumpSound = new Audio("Boing.mp3");
+    const cashSound = new Audio("cash.mp3");
+    cashSound.volume = 0.9;
+
     const playerImg = new Image();
     playerImg.src = "spieler.png";
+    let playerMask = null;
+
+    playerImg.onload = () => {
+      const w = playerImg.naturalWidth;
+      const h = playerImg.naturalHeight;
+      const buf = document.createElement("canvas");
+      buf.width = w;
+      buf.height = h;
+      const bx = buf.getContext("2d");
+      bx.drawImage(playerImg, 0, 0, w, h);
+      const data = bx.getImageData(0, 0, w, h).data;
+      const mask = new Uint8Array(w * h);
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        // "farbige" Pixel: nicht weiß/nahe-weiß und sichtbar
+        mask[p] = (a > 16 && !(r > 240 && g > 240 && b > 240)) ? 1 : 0;
+      }
+      playerMask = { data: mask, w, h };
+      if (typeof player !== "undefined") player.mask = playerMask;
+    };
 
     const obstacleImgs = [
-      { src: "hindernis1.png", hitScaleX: 1.0 },
-      { src: "hindernis2.png", hitScaleX: 0.6 }, // 🔹 schmalere Hitbox
-      { src: "hindernis3.png", hitScaleX: 1.0 }
+      { src: "hindernis1.png" },
+      { src: "hindernis2.png" },
+      { src: "hindernis3.png" },
+      { src: "special1.png" }
     ].map(o => {
       const img = new Image();
       img.src = o.src;
       o.img = img;
+      o.mask = null;
+      o.isSpecial = (o.src === "special1.png");
+      img.onload = () => {
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        const buf = document.createElement("canvas");
+        buf.width = w;
+        buf.height = h;
+        const bx = buf.getContext("2d");
+        bx.drawImage(img, 0, 0, w, h);
+        const data = bx.getImageData(0, 0, w, h).data;
+        const mask = new Uint8Array(w * h);
+        for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+          const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+          mask[p] = (a > 16 && r < 50 && g < 50 && b < 50) ? 1 : 0;
+        }
+        // bestimme letzte Zeile mit solid-Pixeln
+        let lastSolidRow = -1;
+        for (let row = h - 1; row >= 0; row--) {
+          for (let col = 0; col < w; col++) {
+            if (mask[row * w + col]) { lastSolidRow = row; break; }
+          }
+          if (lastSolidRow !== -1) break;
+        }
+        const bottomTrim = (lastSolidRow === -1) ? 0 : (h - 1 - lastSolidRow);
+        o.mask = { data: mask, w, h };
+        o.bottomTrim = bottomTrim;
+      };
       return o;
     });
 
@@ -92,8 +185,10 @@
       velocityY: 0,
       jumpPower: 20,
       gravity: 0.7,
-      onGround: true
+      onGround: true,
+      mask: null
     };
+    if (playerMask) player.mask = playerMask;
 
     const groundY = 300;
     player.y = groundY;
@@ -109,28 +204,65 @@
     let lastCoinTime = 0;
 
     document.addEventListener("keydown", e => {
-      if (e.code === "Space") {
-        if (gameOver) resetGame();
-        else if (player.onGround) {
-          player.velocityY = -player.jumpPower;
-          player.onGround = false;
-          jumpSound.currentTime = 0;
-          jumpSound.play().catch(() => {});
-          started = true;
-        }
+      if (e.code !== "Space") return;
+      if (gameOver) {
+        resetGame();
+        return;
+      }
+      // erste Leertaste startet das Spiel (ohne Sprung)
+      if (!started) {
+        started = true;
+        // ensure overlay hides immediately
+        document.getElementById("startMessage").style.display = "none";
+        return;
+      }
+      // danach normale Sprung-Logik
+      if (player.onGround) {
+        player.velocityY = -player.jumpPower;
+        player.onGround = false;
+        jumpSound.currentTime = 0;
+        jumpSound.play().catch(() => {});
       }
     });
 
     function spawnObstacle() {
-      const o = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
-      const size = 150 + Math.random() * 30;
+      let o = null;
+      for (let tries = 0; tries < 8; tries++) {
+        const cand = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
+        if (!cand.isSpecial || euros >= 20) { o = cand; break; }
+      }
+      if (!o) o = obstacleImgs.find(x => !x.isSpecial) || obstacleImgs[0];
+
+      const natW = o.img.naturalWidth || 0;
+      const natH = o.img.naturalHeight || 0;
+      let width, height, y;
+      if (natW && natH) {
+        // Mindesthöhe jetzt 160..200, plus leichte Vergrößerung bis 1.25x
+        const baseDisplayH = 160 + Math.random() * 40; // 160..200
+        const extraScale = 1 + Math.random() * 0.25;   // 1.00..1.25
+        const displayHeight = Math.round(baseDisplayH * extraScale);
+        const scale = displayHeight / natH;
+        height = displayHeight;
+        width = Math.round(natW * scale);
+        const nativeBottomTrim = (typeof o.bottomTrim === "number") ? o.bottomTrim : 20;
+        const bottomTrimScaled = Math.round(nativeBottomTrim * scale);
+        y = groundY + player.height - (height - bottomTrimScaled);
+      } else {
+        // Fallback ebenfalls mindestens ~160px
+        const size = 160 + Math.random() * 40; // 160..200
+        width = Math.round(size * (1 + Math.random() * 0.25));
+        height = Math.round(size * (1 + Math.random() * 0.25));
+        y = groundY + player.height - height + 20;
+      }
       obstacles.push({
         x: canvas.width,
-        width: size,
-        height: size,
-        y: groundY + player.height - size + 20,
+        width,
+        height,
+        y,
         img: o.img,
-        hitScaleX: o.hitScaleX
+        mask: o.mask,
+        isSpecial: !!o.isSpecial,
+        hit: false
       });
     }
 
@@ -153,13 +285,126 @@
       );
     }
 
+    function pixelCollision(p, o) {
+      if (!p.mask || !o.mask) return checkCollision(p, o, 0, 0);
+
+      const pNatW = p.mask.w, pNatH = p.mask.h;
+      const oNatW = o.mask.w, oNatH = o.mask.h;
+      const ow = o.width, oh = o.height;
+
+      const left = Math.max(p.x, o.x) | 0;
+      const right = Math.min(p.x + p.width, o.x + ow) | 0;
+      const top = Math.max(p.y, o.y) | 0;
+      const bottom = Math.min(p.y + p.height, o.y + oh) | 0;
+      if (right <= left || bottom <= top) return false;
+
+      const pScaleX = pNatW / p.width;
+      const pScaleY = pNatH / p.height;
+      const oScaleX = oNatW / ow;
+      const oScaleY = oNatH / oh;
+      const pMask = p.mask.data;
+      const oMask = o.mask.data;
+
+      for (let y = top; y < bottom; y++) {
+        const pMy = Math.floor((y - p.y) * pScaleY);
+        const oMy = Math.floor((y - o.y) * oScaleY);
+        const pRow = pMy * pNatW;
+        const oRow = oMy * oNatW;
+        for (let x = left; x < right; x++) {
+          const pMx = Math.floor((x - p.x) * pScaleX);
+          const oMx = Math.floor((x - o.x) * oScaleX);
+          const pIdx = pRow + pMx;
+          const oIdx = oRow + oMx;
+          if (pMask[pIdx] && oMask[oIdx]) return true;
+        }
+      }
+      return false;
+    }
+
+    // Fine popup
+    let finePopupTimer = null;
+    function showFinePopup() {
+      const el = document.getElementById("finePopup");
+      if (!el) return;
+      if (finePopupTimer) clearTimeout(finePopupTimer);
+      el.style.display = "block";
+      finePopupTimer = setTimeout(() => { el.style.display = "none"; finePopupTimer = null; }, 2500);
+    }
+
+    let gameMessages = [{ "text": "Game Over", "weight": 1 }];
+    let currentGameOverMessage = null;
+
+    fetch("game_messages.json")
+      .then(r => r.ok ? r.json() : Promise.reject("msg file missing"))
+      .then(json => { gameMessages = json; })
+      .catch(() => { /* Fallback wird verwendet */ });
+
+    function pickMessage({ euros = 0, score = 0 }) {
+      // filter nach Bedingungen
+      const candidates = gameMessages.filter(m => {
+        if (m.minEuros && euros < m.minEuros) return false;
+        if (m.minScore && score < m.minScore) return false;
+        return true;
+      });
+      if (candidates.length === 0) candidates.push(...gameMessages);
+      // gewichtete Auswahl
+      const total = candidates.reduce((s, c) => s + (c.weight || 1), 0);
+      let r = Math.random() * total;
+      for (const c of candidates) {
+        r -= (c.weight || 1);
+        if (r <= 0) return c.text;
+      }
+      return candidates[0].text;
+    }
+
+    function formatMessage(template, vars) {
+      return template.replace(/\{(score|euros)\}/g, (_, k) => vars[k] ?? "");
+    }
+
     function update(timestamp) {
+      // Clear & ground
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#ccc";
       ctx.fillRect(0, groundY + player.height, canvas.width, 10);
 
+      // Draw current state (no movement here so we can freeze on gameOver)
       ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
 
+      obstacles.forEach(o => {
+        ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
+      });
+
+      coins.forEach(c => {
+        if (!c.collected) ctx.drawImage(coinImg, c.x, c.y, c.width, c.height);
+      });
+
+      // Start-Overlay anzeigen, solange nicht gestartet und kein GameOver
+      if (!started && !gameOver) {
+        document.getElementById("startMessage").style.display = "block";
+        document.getElementById("message").style.display = "none";
+        // Spiel pausiert vor dem Start — keine Bewegungsupdates
+        requestAnimationFrame(update);
+        return;
+      } else {
+        document.getElementById("startMessage").style.display = "none";
+      }
+
+      // If gameOver -> freeze everything (no position updates), reset speed for next run
+      if (gameOver) {
+        obstacleSpeed = 7; // zurücksetzen für Neustart
+        const raw = currentGameOverMessage || pickMessage({ euros, score });
+        const html = `${formatMessage(raw, { euros, score })}<br><small>Drücke <b>Leertaste</b> für Neustart</small>`;
+        document.getElementById("message").innerHTML = html;
+        document.getElementById("message").style.display = "block";
+        requestAnimationFrame(update);
+        return;
+      } else {
+        document.getElementById("message").style.display = "none";
+      }
+
+      // --- normale Spiel-Updates (nur wenn nicht gameOver) ---
+
+      // Spieler-Physik
       if (!player.onGround) {
         player.velocityY += player.gravity;
         player.y += player.velocityY;
@@ -170,47 +415,54 @@
         }
       }
 
+      // Hindernisse und Münzen bewegen
       obstacles.forEach(o => {
         o.x -= obstacleSpeed;
-        ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
       });
       obstacles = obstacles.filter(o => o.x + o.width > 0);
 
       coins.forEach(c => {
         c.x -= obstacleSpeed;
-        if (!c.collected) ctx.drawImage(coinImg, c.x, c.y, c.width, c.height);
       });
       coins = coins.filter(c => c.x + c.width > 0);
 
       // Münzen sammeln
       coins.forEach(c => {
-        if (!c.collected && checkCollision(player, c, 10, 15)) { // 🔸 größere Hitbox
+        if (!c.collected && checkCollision(player, c, 10, 15)) {
           c.collected = true;
-          euros++;
+          euros += 20; // Test: jede Münze bringt 20€
           document.getElementById("coins").textContent = `💰 ${euros} €`;
+          cashSound.currentTime = 0;
+          cashSound.play().catch(() => {});
         }
       });
 
       // Hindernis-Kollision
       for (const o of obstacles) {
-        const scaledWidth = o.width * o.hitScaleX; // 🔹 schmalere Hitbox bei Hindernis 2
-        const offset = (o.width - scaledWidth) / 2;
-        const virtualObstacle = { x: o.x + offset, y: o.y, width: scaledWidth, height: o.height };
-        if (checkCollision(player, virtualObstacle)) gameOver = true;
+        if (pixelCollision(player, o)) {
+          if (o.isSpecial) {
+            if (!o.hit) {
+              euros = Math.max(0, euros - 20);
+              document.getElementById("coins").textContent = `💰 ${euros} €`;
+              showFinePopup();
+              o.hit = true;
+            }
+            o.x = -o.width;
+            continue;
+          } else {
+            gameOver = true;
+            if (!currentGameOverMessage) currentGameOverMessage = pickMessage({ euros, score });
+             break;
+          }
+        }
       }
 
-      // Score
       if (started && !gameOver) {
         score++;
         document.getElementById("score").textContent = `Score: ${score}`;
       }
 
-      if (gameOver) {
-        document.getElementById("message").style.display = "block";
-        return;
-      }
-
-      // 🚀 Dynamische Schwierigkeit: alle 300 Punkte minimal schneller
+      // Schwierigkeit
       if (score % 300 === 0 && score > 0) {
         obstacleSpeed = Math.min(obstacleSpeed + 0.3, 16);
       }
@@ -231,19 +483,26 @@
     function resetGame() {
       obstacles = [];
       coins = [];
-      obstacleSpeed = 7;
-      gameOver = false;
+      obstacleSpeed = 7;         // zwingend zurücksetzen
       score = 0;
       euros = 0;
+      gameOver = false;
       started = false;
+      currentGameOverMessage = null;
       player.y = groundY;
       player.velocityY = 0;
+      // timers zurücksetzen, damit nicht sofort viele Objekte spawnen
+      lastObstacleTime = performance.now();
+      lastCoinTime = performance.now();
       document.getElementById("score").textContent = "Score: 0";
       document.getElementById("coins").textContent = "💰 0 €";
       document.getElementById("message").style.display = "none";
-      requestAnimationFrame(update);
+      // Start-Overlay wieder anzeigen
+      document.getElementById("startMessage").style.display = "block";
+      // Wichtig: kein zusätzliches requestAnimationFrame hier — Loop läuft zentral
     }
 
+    // Start loop (einmalig am Dateiende)
     requestAnimationFrame(update);
   </script>
 </body>

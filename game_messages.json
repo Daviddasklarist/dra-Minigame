@@ -1,0 +1,7 @@
+[
+  { "text": "Bravo! Großes Drama, wirklich. Leider warst du heute die Hauptrolle im Stück \"Versagen\". Versuch es nochmal!", "weight": 1 },
+  { "text": "Glückwunsch - dank dir bleibt das wichtigste Denkmal in Augsburg erhalten: Die Baustelle!", "weight": 1 },
+  { "text": "Da hilft auch kein Fugger-Geld mehr...", "weight": 1 },
+  { "text": "Im Gegensatz zur Stadt Augsburg hast du das hier ohne Minus überstanden. Trotzdem verloren :(", "weight": 1 },
+  { "text": "Das war knapp - vielleicht reichts für ein Busticket...", "weight": 1, "minEuros": 2 }
+]
