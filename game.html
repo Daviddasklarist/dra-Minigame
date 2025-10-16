@@ -7,13 +7,13 @@
   <style>
     body {
       margin: 0;
-      background: #fafafa;
+      background: #f9f9f9;
       overflow: hidden;
       display: flex;
       justify-content: center;
       align-items: center;
       height: 100vh;
-      font-family: sans-serif;
+      font-family: system-ui, sans-serif;
     }
 
     #game {
@@ -21,9 +21,10 @@
       width: 600px;
       height: 200px;
       background: #fff;
-      border: 2px solid #ccc;
+      border: 3px solid #444;
       overflow: hidden;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      border-radius: 10px;
     }
 
     #player {
@@ -54,20 +55,23 @@
 
     #message {
       position: absolute;
-      top: 40%;
+      top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
       font-size: 28px;
-      color: #333;
+      color: #222;
       text-align: center;
       display: none;
+      background: rgba(255,255,255,0.9);
+      padding: 10px 20px;
+      border-radius: 8px;
     }
   </style>
 </head>
 <body>
   <div id="game">
     <div id="player"></div>
-    <div id="message">Game Over<br><small>Drück ENTER zum Neustart</small></div>
+    <div id="message">💀 Game Over<br><small>Drück ENTER zum Neustart</small></div>
   </div>
 
   <script>
@@ -84,6 +88,7 @@
       if (jumping || gameOver) return;
       jumping = true;
       let jumpHeight = 0;
+
       const jumpInterval = setInterval(() => {
         if (jumpHeight >= 80) {
           clearInterval(jumpInterval);
@@ -139,7 +144,7 @@
         }
       }, 20);
 
-      // nächstes Hindernis nach zufälliger Zeit
+      // Nächstes Hindernis nach Zufallszeit spawnen
       setTimeout(spawnObstacle, 1000 + Math.random() * 2000);
     }
 
