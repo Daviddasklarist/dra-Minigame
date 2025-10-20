@@ -1,7 +1,10 @@
 [
-  { "text": "Bravo! Großes Drama, wirklich. Leider warst du heute die Hauptrolle im Stück \"Versagen\". Versuch es nochmal!", "weight": 1 },
+  { "text": "Bravo! Großes Drama, wirklich. Leider warst du heute die Hauptrolle im Stück \"Versagen\". Versuch es nochmal!", "weight": 0.5 },
   { "text": "Glückwunsch - dank dir bleibt das wichtigste Denkmal in Augsburg erhalten: Die Baustelle!", "weight": 1 },
-  { "text": "Da hilft auch kein Fugger-Geld mehr...", "weight": 1 },
+  { "text": "Da hilft auch kein Fugger-Geld mehr...", "weight": 0.5 },
   { "text": "Im Gegensatz zur Stadt Augsburg hast du das hier ohne Minus überstanden. Trotzdem verloren :(", "weight": 1 },
-  { "text": "Das war knapp - vielleicht reichts für ein Busticket...", "weight": 1, "minEuros": 2 }
+  { "text": "Das war knapp - vielleicht reichts für ein Busticket...", "weight": 1, "minEuros": 2 },
+  { "text": "Super! Du hast echt viel gesammelt. Es fehlen nur noch {fehlende} Euro bis du wenigstens das Staatstheater drin hast...", "weight": 1, "minEuros": 1 },
+  { "text": "Wow! Schau an! Immerhin hast du schon {euros} Euro gesammelt. Das reicht leider bei weitem noch nicht...", "weight": 1, "minEuros": 1 },
+  { "text": "Unglaublich! Mit {euros} Euro bist du fast so reich wie die Stadt Augsburg. Aber eben nur fast...", "weight": 1, "maxEuros": 10 }
 ]

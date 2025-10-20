@@ -21,8 +21,22 @@
       height: 400px;
       border: 6px solid #333;
       border-radius: 12px;
-      background: white;
+      /* Heller / fast transparenter Hintergrund:
+         Overlay (weiß, 0.85) macht das Bild deutlich heller */
+      background:
+        linear-gradient(rgba(255,255,255,0.6), rgba(255,255,255,0.6)),
+        url('background1.jpg') center/cover no-repeat;
+      background-color: #ffffff; /* Fallback-Farbe */
       overflow: hidden;
+      touch-action: none; /* verhindert Scroll/Pan beim Tippen */
+    }
+
+    /* Canvas spezifisch: keine Auswahl/Panning, deutlicher Pointer auf Klickgeräten */
+    #gameCanvas {
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      cursor: pointer;
     }
 
     #score, #coins {
@@ -93,11 +107,10 @@
     <div id="score">Score: 0</div>
     <div id="coins">💰 0 €</div>
     <div id="message">Game Over<br><small>Drücke <b>Leertaste</b> für Neustart</small></div>
-    <div id="finePopup">Hier ist Halteverbot, Kollege! Fürs Falschparken gibts 20 Euro Strafe! Firma dankt.</div>
+    <div id="finePopup">Hier ist Halteverbot, Kollege! Fürs Falschparken gibts 20 Euro Strafe!</div>
     <div id="startMessage">
       Wir bauen Augsburg wieder auf!<br>
-      Nur du kannst’s richten – hüpf über alles, was wackelt,<br>
-      und füll die Stadtkasse wieder auf!<br>
+      Nur du kannst’s richten! Hüpf über alles, was saniert werden muss und füll die Stadtkasse wieder auf!<br>
       <strong>Drück die Leertaste zum Starten.</strong>
     </div>
     <canvas id="gameCanvas" width="900" height="400"></canvas>
@@ -115,6 +128,18 @@
     playerImg.src = "spieler.png";
     let playerMask = null;
 
+    const player = {
+      x: 120,
+      width: 100,
+      height: 100,
+      y: 0,
+      velocityY: 0,
+      jumpPower: 20,
+      gravity: 0.7,
+      onGround: true,
+      mask: null
+    };
+
     playerImg.onload = () => {
       const w = playerImg.naturalWidth;
       const h = playerImg.naturalHeight;
@@ -127,17 +152,17 @@
       const mask = new Uint8Array(w * h);
       for (let i = 0, p = 0; i < data.length; i += 4, p++) {
         const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
-        // "farbige" Pixel: nicht weiß/nahe-weiß und sichtbar
         mask[p] = (a > 16 && !(r > 240 && g > 240 && b > 240)) ? 1 : 0;
       }
       playerMask = { data: mask, w, h };
-      if (typeof player !== "undefined") player.mask = playerMask;
+      player.mask = playerMask;
     };
 
     const obstacleImgs = [
       { src: "hindernis1.png" },
       { src: "hindernis2.png" },
       { src: "hindernis3.png" },
+      { src: "hindernis4.png" },
       { src: "special1.png" }
     ].map(o => {
       const img = new Image();
@@ -159,7 +184,6 @@
           const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
           mask[p] = (a > 16 && r < 50 && g < 50 && b < 50) ? 1 : 0;
         }
-        // bestimme letzte Zeile mit solid-Pixeln
         let lastSolidRow = -1;
         for (let row = h - 1; row >= 0; row--) {
           for (let col = 0; col < w; col++) {
@@ -177,21 +201,17 @@
     const coinImg = new Image();
     coinImg.src = "muenze.png";
 
-    const player = {
-      x: 120,
-      width: 100,
-      height: 100,
-      y: 0,
-      velocityY: 0,
-      jumpPower: 20,
-      gravity: 0.7,
-      onGround: true,
-      mask: null
-    };
-    if (playerMask) player.mask = playerMask;
-
     const groundY = 300;
+    // Player auf Boden platzieren, damit er nicht oben "schwebt"
     player.y = groundY;
+    player.onGround = true;
+
+    // Spielstatistiken
+    let coinsCollected = 0;
+    let obstaclesDodged = 0;
+    let specialsHit = 0;
+    let startTimestamp = null;
+    let endTimestamp = null;
 
     let obstacles = [];
     let coins = [];
@@ -200,36 +220,97 @@
     let euros = 0;
     let gameOver = false;
     let started = false;
-    let lastObstacleTime = 0;
-    let lastCoinTime = 0;
+    let lastObstacleTime = performance.now();
+    let lastCoinTime = performance.now();
 
-    document.addEventListener("keydown", e => {
-      if (e.code !== "Space") return;
+    // messages
+    let gameMessages = [{ "text": "Game Over", "weight": 1 }];
+    let currentGameOverMessage = null;
+
+    fetch("game_messages.json")
+      .then(r => r.ok ? r.json() : Promise.reject("msg file missing"))
+      .then(json => { gameMessages = json; })
+      .catch(() => { /* fallback */ });
+
+    function pickMessage({ euros = 0, score = 0 }) {
+      const candidates = gameMessages.filter(m => {
+        if (typeof m.minEuros === "number" && euros < m.minEuros) return false;
+        if (typeof m.minScore === "number" && score < m.minScore) return false;
+        return true;
+      });
+      if (candidates.length === 0) candidates.push(...gameMessages);
+      const total = candidates.reduce((s, c) => s + (c.weight || 1), 0);
+      let r = Math.random() * total;
+      for (const c of candidates) {
+        r -= (c.weight || 1);
+        if (r <= 0) return c.text;
+      }
+      return candidates[0].text;
+    }
+
+    function formatMessage(template, vars) {
+      return template.replace(/\{(score|euros|fehlende)\}/g, (_, k) => vars[k] ?? "");
+    }
+
+    // unify input: first action starts via click/tap (no jump), Space only jumps/reset after start
+    function performPrimaryAction() {
       if (gameOver) {
         resetGame();
         return;
       }
-      // erste Leertaste startet das Spiel (ohne Sprung)
       if (!started) {
         started = true;
-        // ensure overlay hides immediately
+        startTimestamp = performance.now();
         document.getElementById("startMessage").style.display = "none";
         return;
       }
-      // danach normale Sprung-Logik
       if (player.onGround) {
         player.velocityY = -player.jumpPower;
         player.onGround = false;
         jumpSound.currentTime = 0;
         jumpSound.play().catch(() => {});
       }
+    }
+
+    // kleines Input‑Lock, damit pointerdown + click nicht doppelt auslösen
+    let inputLocked = false;
+    function lockInput(ms = 200) {
+      inputLocked = true;
+      setTimeout(() => { inputLocked = false; }, ms);
+    }
+
+    // keyboard: Space/Leertaste löst dieselbe Aktion wie Klick/Tap aus
+    document.addEventListener("keydown", e => {
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        if (inputLocked) return;
+        performPrimaryAction();
+        lockInput(200);
+      }
     });
 
+    // pointer (mouse/touch) — auf den Container lauschen, nur pointerdown (kein zusätzlicher click)
+    const containerEl = document.getElementById("gameContainer");
+    containerEl.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      if (inputLocked) return;
+      performPrimaryAction();
+      lockInput(200);
+    }, { passive: false });
+
     function spawnObstacle() {
+      // select a non-special normally; select special only if euros >= 20
       let o = null;
-      for (let tries = 0; tries < 8; tries++) {
+      for (let tries = 0; tries < 12; tries++) {
         const cand = obstacleImgs[Math.floor(Math.random() * obstacleImgs.length)];
-        if (!cand.isSpecial || euros >= 20) { o = cand; break; }
+        if (cand.isSpecial) {
+          if (euros >= 20) { o = cand; break; }
+          // skip special if not enough euros
+          continue;
+        } else {
+          o = cand;
+          break;
+        }
       }
       if (!o) o = obstacleImgs.find(x => !x.isSpecial) || obstacleImgs[0];
 
@@ -237,9 +318,8 @@
       const natH = o.img.naturalHeight || 0;
       let width, height, y;
       if (natW && natH) {
-        // Mindesthöhe jetzt 160..200, plus leichte Vergrößerung bis 1.25x
         const baseDisplayH = 160 + Math.random() * 40; // 160..200
-        const extraScale = 1 + Math.random() * 0.25;   // 1.00..1.25
+        const extraScale = 1 + Math.random() * 0.25;
         const displayHeight = Math.round(baseDisplayH * extraScale);
         const scale = displayHeight / natH;
         height = displayHeight;
@@ -248,8 +328,7 @@
         const bottomTrimScaled = Math.round(nativeBottomTrim * scale);
         y = groundY + player.height - (height - bottomTrimScaled);
       } else {
-        // Fallback ebenfalls mindestens ~160px
-        const size = 160 + Math.random() * 40; // 160..200
+        const size = 160 + Math.random() * 40;
         width = Math.round(size * (1 + Math.random() * 0.25));
         height = Math.round(size * (1 + Math.random() * 0.25));
         y = groundY + player.height - height + 20;
@@ -262,7 +341,8 @@
         img: o.img,
         mask: o.mask,
         isSpecial: !!o.isSpecial,
-        hit: false
+        hit: false,
+        passed: false // für Dodged-Statistik
       });
     }
 
@@ -308,11 +388,13 @@
       for (let y = top; y < bottom; y++) {
         const pMy = Math.floor((y - p.y) * pScaleY);
         const oMy = Math.floor((y - o.y) * oScaleY);
+        if (pMy < 0 || pMy >= pNatH || oMy < 0 || oMy >= oNatH) continue;
         const pRow = pMy * pNatW;
         const oRow = oMy * oNatW;
         for (let x = left; x < right; x++) {
           const pMx = Math.floor((x - p.x) * pScaleX);
           const oMx = Math.floor((x - o.x) * oScaleX);
+          if (pMx < 0 || pMx >= pNatW || oMx < 0 || oMx >= oNatW) continue;
           const pIdx = pRow + pMx;
           const oIdx = oRow + oMx;
           if (pMask[pIdx] && oMask[oIdx]) return true;
@@ -321,7 +403,6 @@
       return false;
     }
 
-    // Fine popup
     let finePopupTimer = null;
     function showFinePopup() {
       const el = document.getElementById("finePopup");
@@ -331,69 +412,46 @@
       finePopupTimer = setTimeout(() => { el.style.display = "none"; finePopupTimer = null; }, 2500);
     }
 
-    let gameMessages = [{ "text": "Game Over", "weight": 1 }];
-    let currentGameOverMessage = null;
-
-    fetch("game_messages.json")
-      .then(r => r.ok ? r.json() : Promise.reject("msg file missing"))
-      .then(json => { gameMessages = json; })
-      .catch(() => { /* Fallback wird verwendet */ });
-
-    function pickMessage({ euros = 0, score = 0 }) {
-      // filter nach Bedingungen
-      const candidates = gameMessages.filter(m => {
-        if (m.minEuros && euros < m.minEuros) return false;
-        if (m.minScore && score < m.minScore) return false;
-        return true;
-      });
-      if (candidates.length === 0) candidates.push(...gameMessages);
-      // gewichtete Auswahl
-      const total = candidates.reduce((s, c) => s + (c.weight || 1), 0);
-      let r = Math.random() * total;
-      for (const c of candidates) {
-        r -= (c.weight || 1);
-        if (r <= 0) return c.text;
-      }
-      return candidates[0].text;
-    }
-
-    function formatMessage(template, vars) {
-      return template.replace(/\{(score|euros)\}/g, (_, k) => vars[k] ?? "");
-    }
-
     function update(timestamp) {
-      // Clear & ground
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#ccc";
       ctx.fillRect(0, groundY + player.height, canvas.width, 10);
 
-      // Draw current state (no movement here so we can freeze on gameOver)
+      // draw player
       ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
 
-      obstacles.forEach(o => {
-        ctx.drawImage(o.img, o.x, o.y, o.width, o.height);
-      });
+      // draw obstacles & coins (positions updated below only when started and not gameOver)
+      obstacles.forEach(o => ctx.drawImage(o.img, o.x, o.y, o.width, o.height));
+      coins.forEach(c => { if (!c.collected) ctx.drawImage(coinImg, c.x, c.y, c.width, c.height); });
 
-      coins.forEach(c => {
-        if (!c.collected) ctx.drawImage(coinImg, c.x, c.y, c.width, c.height);
-      });
-
-      // Start-Overlay anzeigen, solange nicht gestartet und kein GameOver
+      // Start overlay
       if (!started && !gameOver) {
         document.getElementById("startMessage").style.display = "block";
         document.getElementById("message").style.display = "none";
-        // Spiel pausiert vor dem Start — keine Bewegungsupdates
         requestAnimationFrame(update);
         return;
       } else {
         document.getElementById("startMessage").style.display = "none";
       }
 
-      // If gameOver -> freeze everything (no position updates), reset speed for next run
+      // Game over freeze
       if (gameOver) {
-        obstacleSpeed = 7; // zurücksetzen für Neustart
+        obstacleSpeed = 7;
         const raw = currentGameOverMessage || pickMessage({ euros, score });
-        const html = `${formatMessage(raw, { euros, score })}<br><small>Drücke <b>Leertaste</b> für Neustart</small>`;
+        const remaining = Math.max(0, 420000000 - euros);
+        const playTimeMs = startTimestamp ? ((endTimestamp || performance.now()) - startTimestamp) : 0;
+        const playTimeSec = Math.floor(playTimeMs / 1000);
+        const statsHtml =
+          `<div style="text-align:left;margin-top:10px">` +
+          `<strong>Deine Statistik:</strong><br>` +
+          `Punkte: ${score}<br>` +
+          `Stadtkasse: ${euros} €<br>` +
+          `Hindernisse umgangen: ${obstaclesDodged}<br>` +
+          `Ordnungsamt-Fälle: ${specialsHit}<br>` +
+          `Spielzeit: ${playTimeSec} s<br>` +
+          `Verbleibend: ${remaining} €` +
+          `</div>`;
+        const html = `${formatMessage(raw, { euros, score, fehlende: remaining })}${statsHtml}<br><small>Drücke <b>Leertaste</b> für Neustart</small>`;
         document.getElementById("message").innerHTML = html;
         document.getElementById("message").style.display = "block";
         requestAnimationFrame(update);
@@ -402,9 +460,7 @@
         document.getElementById("message").style.display = "none";
       }
 
-      // --- normale Spiel-Updates (nur wenn nicht gameOver) ---
-
-      // Spieler-Physik
+      // physics
       if (!player.onGround) {
         player.velocityY += player.gravity;
         player.y += player.velocityY;
@@ -415,29 +471,35 @@
         }
       }
 
-      // Hindernisse und Münzen bewegen
-      obstacles.forEach(o => {
-        o.x -= obstacleSpeed;
-      });
+      // move objects
+      obstacles.forEach(o => { o.x -= obstacleSpeed; });
       obstacles = obstacles.filter(o => o.x + o.width > 0);
 
-      coins.forEach(c => {
-        c.x -= obstacleSpeed;
-      });
+      // Count dodged obstacles when they pass the player x
+      for (const o of obstacles) {
+        if (!o.passed && (o.x + o.width) < player.x) {
+          o.passed = true;
+          // only count as dodged if it wasn't a special hit (specials that were hit get removed)
+          if (!o.isSpecial) obstaclesDodged++;
+        }
+      }
+
+      coins.forEach(c => { c.x -= obstacleSpeed; });
       coins = coins.filter(c => c.x + c.width > 0);
 
-      // Münzen sammeln
+      // collect coins
       coins.forEach(c => {
         if (!c.collected && checkCollision(player, c, 10, 15)) {
           c.collected = true;
-          euros += 20; // Test: jede Münze bringt 20€
+          euros += 1; // aktuell 1€
+          coinsCollected++;
           document.getElementById("coins").textContent = `💰 ${euros} €`;
           cashSound.currentTime = 0;
           cashSound.play().catch(() => {});
         }
       });
 
-      // Hindernis-Kollision
+      // collisions
       for (const o of obstacles) {
         if (pixelCollision(player, o)) {
           if (o.isSpecial) {
@@ -446,13 +508,15 @@
               document.getElementById("coins").textContent = `💰 ${euros} €`;
               showFinePopup();
               o.hit = true;
+              specialsHit++;
             }
             o.x = -o.width;
             continue;
           } else {
             gameOver = true;
+            endTimestamp = performance.now();
             if (!currentGameOverMessage) currentGameOverMessage = pickMessage({ euros, score });
-             break;
+            break;
           }
         }
       }
@@ -462,7 +526,6 @@
         document.getElementById("score").textContent = `Score: ${score}`;
       }
 
-      // Schwierigkeit
       if (score % 300 === 0 && score > 0) {
         obstacleSpeed = Math.min(obstacleSpeed + 0.3, 16);
       }
@@ -483,26 +546,28 @@
     function resetGame() {
       obstacles = [];
       coins = [];
-      obstacleSpeed = 7;         // zwingend zurücksetzen
+      obstacleSpeed = 7;
       score = 0;
       euros = 0;
+      coinsCollected = 0;
+      obstaclesDodged = 0;
+      specialsHit = 0;
       gameOver = false;
       started = false;
       currentGameOverMessage = null;
       player.y = groundY;
       player.velocityY = 0;
-      // timers zurücksetzen, damit nicht sofort viele Objekte spawnen
       lastObstacleTime = performance.now();
       lastCoinTime = performance.now();
+      startTimestamp = null;
+      endTimestamp = null;
       document.getElementById("score").textContent = "Score: 0";
       document.getElementById("coins").textContent = "💰 0 €";
       document.getElementById("message").style.display = "none";
-      // Start-Overlay wieder anzeigen
       document.getElementById("startMessage").style.display = "block";
-      // Wichtig: kein zusätzliches requestAnimationFrame hier — Loop läuft zentral
     }
 
-    // Start loop (einmalig am Dateiende)
+    // start loop
     requestAnimationFrame(update);
   </script>
 </body>
